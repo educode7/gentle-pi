@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { __testing } from "../extensions/skill-registry.ts";
 
@@ -28,68 +28,53 @@ test("project skill dirs include supported workspace roots", () => {
 	}
 });
 
-test("Compact Rules are preferred over fallback sections", () => {
-	const rules = __testing.extractCompactRulesSection(`## Compact Rules
+test("registry renders indexed skill paths instead of compact rules", () => {
+	const cwd = join(tmpdir(), `gentle-pi-render-${Date.now()}`);
+	const skillPath = join(cwd, "skills", "go-testing", "SKILL.md");
+	const registry = __testing.renderRegistry(cwd, ["skills"], [
+		{
+			name: "go-testing",
+			path: skillPath,
+			description: "Trigger: Go tests. Apply focused testing patterns.",
+		},
+	]);
 
-- Explicit compact rule.
+	assert.match(registry, /## Skills/);
+	assert.match(registry, /\| Skill \| Trigger \/ description \| Scope \| Path \|/);
+	assert.match(registry, /## Loading protocol/);
+	assert.match(registry, /\| `go-testing` \| Trigger: Go tests\. Apply focused testing patterns\. \| project \|/);
+	assert.match(registry, new RegExp(skillPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+	assert.doesNotMatch(registry, /Selected skills and compact rules/);
+	assert.doesNotMatch(registry, /Project Standards \(auto-resolved\)/);
+	assert.doesNotMatch(registry, /Rules:/);
+});
+
+test("frontmatter parser keeps full multiline descriptions", () => {
+	const parsed = __testing.parseFrontmatter(`---
+name: ai-sdk-5
+description: >
+  Trigger: AI chat features, Vercel AI SDK 5, streaming UI.
+  Use AI SDK 5 patterns and avoid v4 APIs.
+license: Apache-2.0
+---
 
 ## Hard Rules
 
-- Hard rule should not be copied.
+- Do not copy this rule.
 `);
 
-	assert.deepEqual(rules, ["Explicit compact rule."]);
-});
-
-test("LLM-first and legacy sections extract bullets, ordered lists, and tables", () => {
-	const rules = __testing.extractCompactRulesSection(`## Hard Rules
-
-- Prefer focused tests.
-
-## Critical Rules
-
-1. Link an approved issue.
-2. Keep PRs within review budget.
-
-## Voice Rules
-
-| Rule | Requirement |
-|------|-------------|
-| Be warm | Sound like a teammate. |
-
-## Decision Gates
-
-| Target | Test pattern |
-|---|---|
-| File operations | Use t.TempDir(). |
-`);
-
-	assert.deepEqual(rules, [
-		"Prefer focused tests.",
-		"Link an approved issue.",
-		"Keep PRs within review budget.",
-		"Be warm: Sound like a teammate.",
-		"File operations: Use t.TempDir().",
-	]);
-});
-
-test("description trigger text is extracted when present", () => {
+	assert.equal(parsed.name, "ai-sdk-5");
 	assert.equal(
-		__testing.extractTriggerDescription("Write comments. Trigger: PR feedback, issue replies."),
-		"PR feedback, issue replies.",
+		parsed.description,
+		"Trigger: AI chat features, Vercel AI SDK 5, streaming UI. Use AI SDK 5 patterns and avoid v4 APIs.",
 	);
-	assert.equal(__testing.extractTriggerDescription("No explicit trigger."), "No explicit trigger.");
 });
 
-test("fallback extraction is capped at 15 rules", () => {
-	const body = `## Hard Rules
-
-${Array.from({ length: 16 }, (_, i) => `- Rule ${String(i + 1).padStart(2, "0")}.`).join("\n")}
-`;
-	const rules = __testing.extractCompactRulesSection(body);
-
-	assert.equal(rules.length, 15);
-	assert.equal(rules.at(-1), "Rule 15.");
+test("description normalization preserves trigger and collapses whitespace", () => {
+	assert.equal(
+		__testing.normalizeSkillDescription("Trigger: PR feedback, issue replies.\nUse maintainer voice."),
+		"Trigger: PR feedback, issue replies. Use maintainer voice.",
+	);
 });
 
 test("project-scoped duplicate wins over user duplicate", () => {
@@ -97,8 +82,8 @@ test("project-scoped duplicate wins over user duplicate", () => {
 	const projectPath = join(cwd, ".opencode/skills/dup/SKILL.md");
 	const userPath = join(cwd + "-home", ".config/opencode/skills/dup/SKILL.md");
 	const entries = [
-		{ name: "dup", path: userPath, description: "user", rules: ["User rule."] },
-		{ name: "dup", path: projectPath, description: "project", rules: ["Project rule."] },
+		{ name: "dup", path: userPath, description: "user" },
+		{ name: "dup", path: projectPath, description: "project" },
 	];
 
 	const [chosen] = __testing.dedupeBySkillName(entries, cwd);
@@ -128,4 +113,57 @@ test("startup skip honors no skill registry controls", () => {
 		true,
 	);
 	assert.equal(__testing.shouldSkipSkillRegistryStartup(disabled, [], {}), false);
+});
+
+test("scope and markdown cells are represented in registry", () => {
+	const cwd = join(tmpdir(), `gentle-pi-scope-${Date.now()}`);
+	const projectPath = join(cwd, "skills", "docs", "SKILL.md");
+	const userPath = join(tmpdir(), `gentle-pi-home-${Date.now()}`, ".claude", "skills", "docs", "SKILL.md");
+	const registry = __testing.renderRegistry(cwd, ["skills"], [
+		{ name: "project-docs", path: projectPath, description: "Docs | guides" },
+		{ name: "user-docs", path: userPath, description: "" },
+	]);
+
+	assert.match(registry, /\| `project-docs` \| Docs \\\| guides \| project \|/);
+	assert.match(registry, /\| `user-docs` \| — \| user \|/);
+});
+
+test("generated registry file indexes skill path and omits body rules", async () => {
+	const cwd = join(tmpdir(), `gentle-pi-regenerate-${Date.now()}`);
+	const skillPath = join(cwd, "skills", "go-testing", "SKILL.md");
+	mkdirSync(dirname(skillPath), { recursive: true });
+	writeFileSync(
+		skillPath,
+		`---
+name: go-testing
+description: "Trigger: Go tests. Apply focused Go testing patterns."
+---
+
+## Hard Rules
+
+- Run focused tests before broad tests.
+`,
+	);
+
+	const dirs = await __testing.uniqueExistingDirs(__testing.projectSkillDirs(cwd));
+	assert.ok(dirs.includes(join(cwd, "skills")));
+
+	const registry = __testing.renderRegistry(cwd, ["skills"], [
+		{
+			name: "go-testing",
+			path: skillPath,
+			description: "Trigger: Go tests. Apply focused Go testing patterns.",
+		},
+	]);
+	assert.match(registry, /go-testing/);
+	assert.match(registry, /Trigger: Go tests\. Apply focused Go testing patterns\./);
+	assert.match(registry, new RegExp(skillPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+	assert.doesNotMatch(registry, /Run focused tests before broad tests/);
+});
+
+test("orchestrator documents path injection protocol", () => {
+	const source = readFileSync(join(import.meta.dirname, "..", "assets", "orchestrator.md"), "utf8");
+	assert.match(source, /## Skills to load before work/);
+	assert.match(source, /paths-injected/);
+	assert.doesNotMatch(source, /Use matching compact rules based on code context and task intent/);
 });

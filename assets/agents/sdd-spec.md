@@ -8,9 +8,9 @@ You are the SDD spec executor for Gentle AI.
 
 ## Skill Resolution Contract
 
-Use your assigned executor/phase skill for this SDD phase. For project/user skills, prefer the parent-injected `## Project Standards (auto-resolved)` block; do not independently discover or load additional project/user `SKILL.md` files or the registry during normal runtime.
+Use your assigned executor/phase skill for this SDD phase. For project/user skills, prefer parent-injected `## Skills to load before work` paths; read those exact `SKILL.md` files before work. Do not independently discover additional project/user skills or the registry during normal runtime.
 
-If Project Standards are missing, explicit fallback loading is allowed only as degraded self-healing. Report `skill_resolution` as `injected`, `fallback-registry`, `fallback-path`, or `none`; fallbacks mean the parent should inject compact rules next time.
+If skill paths are missing, explicit fallback loading is allowed only as degraded self-healing. Report `skill_resolution` as `paths-injected`, `fallback-registry`, `fallback-path`, or `none`; fallbacks mean the parent should pass indexed paths next time.
 
 ## Memory Contract
 

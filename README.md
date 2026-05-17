@@ -293,15 +293,15 @@ Behavior:
 - startup refresh is skipped when Pi starts with `--no-skills` / `-ns`, `--no-skill-registry`, or `GENTLE_PI_NO_SKILL_REGISTRY=1`;
 - `/skill-registry:refresh` forces regeneration;
 - a best-effort watcher refreshes when skill files change;
-- `## Compact Rules` wins when present; otherwise the registry extracts compact rules from `## Hard Rules`, `## Critical Rules`, `## Critical Patterns`, `## Voice Rules`, and `## Decision Gates` using bullets, numbered lists, or simple tables.
+- the registry indexes skill names, full descriptions, scope, and exact `SKILL.md` paths without copying skill body rules.
 
 Skill discovery is a guardrail, not a workflow router: it helps Pi load the right skill without forcing extra ceremony.
 
 Delegation contract:
 
-- parent/orchestrator resolves project/user skills from the registry and injects compact rule text under `## Project Standards (auto-resolved)`;
+- parent/orchestrator resolves project/user skills from the registry and passes matching paths under `## Skills to load before work`;
 - SDD subagents still use their assigned executor/phase skill;
-- during normal runtime, subagents should not independently discover or load additional project/user `SKILL.md` files or the registry;
+- during normal runtime, subagents should not independently discover additional project/user `SKILL.md` files or the registry;
 - fallback loading is degraded self-healing and must be reported via `skill_resolution` as `fallback-registry`, `fallback-path`, or `none`.
 
 ## Persona modes

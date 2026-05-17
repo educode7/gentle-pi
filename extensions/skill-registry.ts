@@ -15,12 +15,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const REGISTRY_REL_PATH = ".atl/skill-registry.md";
 const CACHE_REL_PATH = ".atl/.skill-registry.cache.json";
-const SECTION_MARKER = "## Selected skills and compact rules";
+const SECTION_MARKER = "## Skills";
 const EXCLUDE_NAMES = new Set(["_shared", "skill-registry"]);
 const EXCLUDE_PREFIXES = ["sdd-"];
 const ATL_IGNORE_ENTRY = ".atl/";
 const WATCH_DEBOUNCE_MS = 500;
-const REGISTRY_SCHEMA_VERSION = 4;
+const REGISTRY_SCHEMA_VERSION = 5;
 const NO_SKILL_REGISTRY_FLAG = "no-skill-registry";
 const NO_SKILL_REGISTRY_ENV = "GENTLE_PI_NO_SKILL_REGISTRY";
 const LEGACY_PROJECT_REGISTRY_REL_PATH = ".pi/extensions/skill-registry.ts";
@@ -39,7 +39,7 @@ interface SkillEntry {
 	name: string;
 	path: string;
 	description: string;
-	rules: string[];
+	scope?: string;
 }
 
 function userSkillDirs(): string[] {
@@ -114,88 +114,34 @@ function parseFrontmatter(source: string): { name?: string; description?: string
 	const fm = source.slice(4, end);
 	const body = source.slice(end + 4).replace(/^\n/, "");
 	const out: { name?: string; description?: string } = {};
-	for (const line of fm.split("\n")) {
+	const lines = fm.split("\n");
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
 		const m = line.match(/^(\w+):\s*(.*)$/);
 		if (!m) continue;
 		const key = m[1];
 		let value = m[2].trim();
-		if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+		if (value === ">" || value === ">-" || value === "|" || value === "|-") {
+			const block: string[] = [];
+			while (i + 1 < lines.length) {
+				const next = lines[i + 1];
+				if (next.trim() === "") {
+					block.push("");
+					i++;
+					continue;
+				}
+				if (!next.startsWith(" ") && !next.startsWith("\t")) break;
+				block.push(next.trim());
+				i++;
+			}
+			value = block.join(" ").trim();
+		} else if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
 			value = value.slice(1, -1);
 		}
 		if (key === "name") out.name = value;
 		else if (key === "description") out.description = value;
 	}
 	return { ...out, body };
-}
-
-const FALLBACK_RULE_HEADINGS = ["Hard Rules", "Critical Rules", "Critical Patterns", "Voice Rules", "Decision Gates"];
-const MAX_EXTRACTED_RULE_COUNT = 15;
-
-function extractCompactRulesSection(body: string): string[] {
-	const compactRules = extractRulesFromHeadings(body, ["Compact Rules"]);
-	if (compactRules.length > 0) return compactRules;
-	return extractRulesFromHeadings(body, FALLBACK_RULE_HEADINGS);
-}
-
-function extractRulesFromHeadings(body: string, headings: string[]): string[] {
-	const wanted = new Set(headings.map(normalizeHeading));
-	let inSection = false;
-	const rules: string[] = [];
-	for (const raw of body.split("\n")) {
-		const line = raw.trimEnd();
-		const heading = line.match(/^##\s+(.+?)\s*$/);
-		if (heading) {
-			inSection = wanted.has(normalizeHeading(heading[1]));
-			continue;
-		}
-		if (!inSection) continue;
-		if (/^##\s+/.test(line)) {
-			inSection = false;
-			continue;
-		}
-		const rule = extractRuleLine(line);
-		if (rule) {
-			rules.push(rule);
-			if (rules.length >= MAX_EXTRACTED_RULE_COUNT) return rules;
-		}
-	}
-	return rules;
-}
-
-function extractRuleLine(line: string): string | undefined {
-	const trimmed = line.trim();
-	if (!trimmed) return undefined;
-	const bullet = trimmed.match(/^-\s+(.+)$/);
-	if (bullet) return bullet[1].trim();
-	const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
-	if (ordered) return ordered[1].trim();
-	if (trimmed.startsWith("|") && trimmed.endsWith("|")) return extractRuleTableRow(trimmed);
-	return undefined;
-}
-
-function extractRuleTableRow(line: string): string | undefined {
-	const cells = line
-		.slice(1, -1)
-		.split("|")
-		.map((cell) => cell.trim());
-	if (cells.length < 2) return undefined;
-	if (isTableSeparator(cells) || isTableHeader(cells) || !cells[0] || !cells[1]) return undefined;
-	return `${cells[0]}: ${cells[1]}`;
-}
-
-function isTableSeparator(cells: string[]): boolean {
-	return cells.every((cell) => cell.replace(/[\s:-]/g, "") === "");
-}
-
-function isTableHeader(cells: string[]): boolean {
-	if (cells.length < 2) return false;
-	const first = normalizeHeading(cells[0]);
-	const second = normalizeHeading(cells[1]);
-	return (first === "rule" && second === "requirement") || (first === "target" && second === "test pattern");
-}
-
-function normalizeHeading(heading: string): string {
-	return heading.trim().toLowerCase();
 }
 
 function deriveSkillName(file: string, frontmatterName: string | undefined): string {
@@ -235,21 +181,15 @@ async function loadSkill(file: string): Promise<SkillEntry | undefined> {
 	const fm = parseFrontmatter(source);
 	const name = deriveSkillName(file, fm.name);
 	if (isExcluded(name)) return undefined;
-	const rules = extractCompactRulesSection(fm.body);
 	return {
 		name,
 		path: file,
-		description: extractTriggerDescription(fm.description ?? ""),
-		rules:
-			rules.length > 0
-				? rules
-				: ["No compact rules declared; delegators should load the full skill file before direct work, or pass an explicit fallback path only when Project Standards cannot be injected."],
+		description: normalizeSkillDescription(fm.description ?? ""),
 	};
 }
 
-function extractTriggerDescription(description: string): string {
-	const match = description.match(/\bTrigger:\s*(.+)$/i);
-	return match ? match[1].trim() : description;
+function normalizeSkillDescription(description: string): string {
+	return description.replace(/\s+/g, " ").trim();
 }
 
 function dedupeBySkillName(entries: SkillEntry[], cwd: string): SkillEntry[] {
@@ -267,6 +207,26 @@ function dedupeBySkillName(entries: SkillEntry[], cwd: string): SkillEntry[] {
 		out.push(projectScoped ?? list[0]);
 	}
 	return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function scopeForPath(cwd: string, path: string): string {
+	const cleanCwd = comparablePath(cwd);
+	const projectPrefix = cleanCwd.endsWith(sep) ? cleanCwd : `${cleanCwd}${sep}`;
+	return comparablePath(path).startsWith(projectPrefix) ? "project" : "user";
+}
+
+function markdownCell(value: string): string {
+	const trimmed = value.replace(/\n/g, " ").replace(/\|/g, "\\|").trim();
+	return trimmed.length > 0 ? trimmed : "—";
+}
+
+function isCacheFile(value: unknown): value is { fingerprint: string } {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"fingerprint" in value &&
+		typeof value.fingerprint === "string"
+	);
 }
 
 async function fingerprint(files: string[]): Promise<string> {
@@ -301,24 +261,24 @@ function renderRegistry(cwd: string, sources: string[], entries: SkillEntry[]): 
 	lines.push("");
 	lines.push("## Contract");
 	lines.push("");
-	lines.push("**Delegator use only.** Any agent that launches subagents reads this registry to resolve compact rules, then injects matching rule text into subagent prompts under `## Project Standards (auto-resolved)`.");
+	lines.push("**Delegator use only.** This registry is an index, not a summary. Any agent that launches subagents reads it to select relevant skills, then passes exact `SKILL.md` paths for the subagent to read before work.");
 	lines.push("");
-	lines.push("Subagents still read their assigned executor/phase skill. During normal runtime, they do **not** independently discover or load additional project/user `SKILL.md` files or this registry; project/user rules arrive pre-digested. Explicit fallback loading is degraded self-healing and must be reported in `skill_resolution` as `fallback-registry` or `fallback-path`.");
+	lines.push("`SKILL.md` remains the source of truth. Do not inject generated summaries or compact rules by default; pass paths so subagents load the full runtime contract and preserve author intent.");
 	lines.push("");
 	lines.push(SECTION_MARKER);
 	lines.push("");
+	lines.push("| Skill | Trigger / description | Scope | Path |");
+	lines.push("| --- | --- | --- | --- |");
 	for (const entry of entries) {
-		lines.push(`### ${entry.name}`);
-		lines.push(`- Path: ${entry.path}`);
-		if (entry.description) {
-			lines.push(`- Trigger: ${entry.description}`);
-		}
-		lines.push("- Rules:");
-		for (const rule of entry.rules) {
-			lines.push(`  - ${rule}`);
-		}
-		lines.push("");
+		lines.push(`| \`${markdownCell(entry.name)}\` | ${markdownCell(entry.description)} | ${markdownCell(entry.scope ?? scopeForPath(cwd, entry.path))} | \`${markdownCell(entry.path)}\` |`);
 	}
+	lines.push("");
+	lines.push("## Loading protocol");
+	lines.push("");
+	lines.push("1. Match task context and target files against the `Trigger / description` column.");
+	lines.push("2. Pass only the matching `Path` values to the subagent under `## Skills to load before work`.");
+	lines.push("3. Instruct the subagent to read those exact `SKILL.md` files before reading, writing, reviewing, testing, or creating artifacts.");
+	lines.push("4. If no matching skill exists, proceed without project skill injection and report `skill_resolution: none`.");
 	return `${lines.join("\n").trimEnd()}\n`;
 }
 
@@ -403,11 +363,8 @@ async function regenerateRegistry(
 	let cached: string | undefined;
 	if (await pathExists(cachePath)) {
 		try {
-			cached = (
-				JSON.parse(await readFile(cachePath, "utf8")) as {
-					fingerprint?: string;
-				}
-			).fingerprint;
+			const parsed: unknown = JSON.parse(await readFile(cachePath, "utf8"));
+			cached = isCacheFile(parsed) ? parsed.fingerprint : undefined;
 		} catch {
 			cached = undefined;
 		}
@@ -496,10 +453,12 @@ async function startSkillRegistryWatcher(
 export const __testing = {
 	projectSkillDirs,
 	userSkillDirs,
-	extractCompactRulesSection,
-	extractTriggerDescription,
 	uniqueExistingDirs,
 	dedupeBySkillName,
+	scopeForPath,
+	normalizeSkillDescription,
+	parseFrontmatter,
+	renderRegistry,
 	shouldSkipSkillRegistryStartup,
 };
 

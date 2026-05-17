@@ -260,22 +260,23 @@ The parent should synthesize these envelopes, not paste long raw reports unless 
 The parent resolves skills once per session or before first delegation:
 
 1. Read `.atl/skill-registry.md` if present.
-2. Use matching compact rules based on code context and task intent.
-3. Inject matching rule text into subagent prompts under `## Project Standards (auto-resolved)`.
-4. If the registry is absent, continue but mention that project-specific skill rules were unavailable.
+2. Match task context and target files against the `Trigger / description` column.
+3. Pass only matching `Path` values to subagents under `## Skills to load before work`.
+4. Tell subagents to read those exact `SKILL.md` files before reading, writing, reviewing, testing, or creating artifacts.
+5. If the registry is absent, continue but mention that project-specific skill paths were unavailable.
 
-Subagents should receive pre-digested project/user rules. They should not have to rediscover the registry.
+Subagents should receive exact indexed paths. They should not have to rediscover the registry.
 
-Important distinction: SDD subagents still use their assigned executor/phase skill (for example `sdd-apply`, `sdd-design`, or `sdd-verify`). What they should not do during normal runtime is independently discover or load additional project/user `SKILL.md` files or the registry. Those project/user rules arrive pre-digested from the parent under `## Project Standards (auto-resolved)`.
+Important distinction: SDD subagents still use their assigned executor/phase skill (for example `sdd-apply`, `sdd-design`, or `sdd-verify`). What they should not do during normal runtime is independently discover additional project/user `SKILL.md` files or the registry. The parent passes selected project/user skill paths explicitly.
 
 If a subagent reports `skill_resolution`, interpret it as project/user skill resolution:
 
-- `injected`: parent supplied `## Project Standards (auto-resolved)`.
-- `fallback-registry`: subagent self-loaded compact rules from a registry because Project Standards were missing; degraded but auditable.
-- `fallback-path`: subagent loaded explicit `SKILL: Load` paths because Project Standards were missing; degraded but auditable.
+- `paths-injected`: parent supplied `## Skills to load before work` with exact `SKILL.md` paths.
+- `fallback-registry`: subagent self-loaded skill paths from the registry because parent paths were missing; degraded but auditable.
+- `fallback-path`: subagent loaded explicit skill paths because parent paths were missing; degraded but auditable.
 - `none`: no project/user skills were loaded.
 
-If any subagent reports a fallback instead of `injected`, treat it as an orchestration gap and correct future delegations by injecting the compact rules directly.
+If any subagent reports a fallback instead of `paths-injected`, treat it as an orchestration gap and correct future delegations by passing exact indexed paths directly.
 
 ## Intent-Driven Skill Discovery
 
@@ -284,7 +285,7 @@ For skill-shaped requests, do not treat injected `<available_skills>` as complet
 Discovery order:
 
 1. Read `.atl/skill-registry.md` when present.
-2. If the registry suggests a specific skill, load that skill before acting.
+2. If the registry suggests a specific skill, load the indexed `SKILL.md` path before acting.
 3. If the expected skill is absent from the registry but the request clearly names a known workflow, search common project/user skill dirs such as `./skills`, `.pi/skills`, `.agents/skills`, `~/.config/opencode/skills`, `~/.claude/skills`, and other configured skill roots.
 4. Prefer the most specific project skill over a global skill with the same intent.
 5. If no matching skill exists, continue with the smallest safe fallback and say which expected skill was unavailable.
